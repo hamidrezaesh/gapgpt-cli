@@ -8,6 +8,7 @@ from rich.prompt import Prompt
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.spinner import Spinner
+from rich.text import Text
 from typing import Optional, List, Dict
 import json
 from pathlib import Path
@@ -161,16 +162,24 @@ class App:
         """Add message to conversation history"""
         self.conversation_history.append({"role": role, "content": content})
 
-    def _get_response(self) -> str:
-        """Get response from GapGPT"""
+    def _get_response(self):
+        """Get response from GapGPT and yield chunks as they arrive"""
         try:
-            response = self.client.chat.completions.create(
-                model=self.model, messages=self.conversation_history
+            stream = self.client.chat.completions.create(
+                model=self.model, messages=self.conversation_history, stream=True
             )
 
-            return response.choices[0].message.content
+            for chunk in stream:
+                try:
+                    content = chunk.choices[0].delta.content
+                    if content is not None:
+                        yield content
+                except (AttributeError, IndexError):
+                    # skips chunk without content
+                    continue
+
         except Exception as e:
-            return f"❌ Error: {str(e)}"
+            yield f"❌ Error: {str(e)}"
 
     def _clear_history(self):
         """Reset conversation"""
@@ -282,17 +291,29 @@ class App:
                 # Add user message
                 self._add_message("user", user_input)
 
+                console.print()
+
+                full_response = ""
+
+                console.print("[dim]🤖: [/dim]", end="")
+
                 # Show thinking indicator
                 with console.status("[bold green]🤔 Thinking..."):
-                    response = self._get_response()
+                    response_text = Text()
+
+                    for chunk in self._get_response():
+                        full_response += chunk
+                        console.print(chunk, end="", style="bright_green")
+
+                    console.print()
 
                 # Add assistant response
-                self._add_message("assistant", response)
+                self._add_message("assistant", full_response)
 
                 # Display response
                 console.print(
                     Panel(
-                        Markdown(response),
+                        Markdown(full_response),
                         title="🤖 GapGPT",
                         border_style="green",
                         padding=(1, 2),
@@ -502,6 +523,7 @@ def help():
     console.print("  [cyan]Ctrl+C[/cyan]                   - Exit chat")
     console.print("  [cyan]Ctrl+L[/cyan]                   - Clear screen")
     console.print("  [cyan]↑/↓[/cyan]                      - Navigate command history")
+
 
 if __name__ == "__main__":
     app()
